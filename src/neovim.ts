@@ -1,4 +1,6 @@
 import { attach, Neovim } from 'neovim';
+import { existsSync } from 'fs';
+import { statSync } from 'fs';
 
 export class NeovimConnectionError extends Error {
   constructor(socketPath: string, cause?: Error) {
@@ -86,6 +88,21 @@ export class NeovimManager {
   private async connect(): Promise<Neovim> {
     const socketPath = process.env.NVIM_SOCKET_PATH || '/tmp/nvim';
     this.validateSocketPath(socketPath);
+    
+    // Check if socket exists before attempting connection
+    if (!existsSync(socketPath)) {
+      throw new NeovimConnectionError(socketPath, new Error('Socket file does not exist'));
+    }
+    
+    // Check if it's actually a socket
+    try {
+      const stats = statSync(socketPath);
+      if (!stats.isSocket()) {
+        throw new NeovimConnectionError(socketPath, new Error('Path exists but is not a socket'));
+      }
+    } catch (error) {
+      // If we can't stat it, try to connect anyway
+    }
     
     try {
       return attach({
