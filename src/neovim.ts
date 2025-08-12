@@ -57,6 +57,10 @@ interface WindowInfo {
 
 export class NeovimManager {
   private static instance: NeovimManager;
+  private connections: Map<string, Promise<Neovim>> = new Map();
+  private connectionAttempts: Map<string, number> = new Map();
+  private readonly MAX_CONNECTION_ATTEMPTS = 5;
+  private readonly BASE_RETRY_DELAY = 500; // milliseconds
 
   private constructor() { }
 
@@ -67,9 +71,9 @@ export class NeovimManager {
     return NeovimManager.instance;
   }
 
-  public async healthCheck(): Promise<boolean> {
+  public async healthCheck(socketPath?: string): Promise<boolean> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       await nvim.eval('1'); // Simple test
       return true;
     } catch {
@@ -83,23 +87,68 @@ export class NeovimManager {
     }
   }
 
-  private async connect(): Promise<Neovim> {
-    const socketPath = process.env.NVIM_SOCKET_PATH || '/tmp/nvim';
+  private async connect(customSocketPath?: string): Promise<Neovim> {
+    const socketPath = customSocketPath || process.env.NVIM_SOCKET_PATH || '/tmp/nvim';
     this.validateSocketPath(socketPath);
     
+    // Check if we have a connection for this socket path
+    let connection = this.connections.get(socketPath);
+    
+    // If no connection attempt has been made, create new one
+    if (!connection) {
+      connection = this.attemptConnection(socketPath);
+      this.connections.set(socketPath, connection);
+    }
+
     try {
-      return attach({
-        socket: socketPath
-      });
+      return await connection;
     } catch (error) {
-      console.error('Error connecting to Neovim:', error);
-      throw new NeovimConnectionError(socketPath, error as Error);
+      // Reset connection for next attempt
+      this.connections.delete(socketPath);
+      this.connectionAttempts.delete(socketPath);
+      throw error;
     }
   }
 
-  public async getBufferContents(filename?: string): Promise<Map<number, string>> {
+  private async attemptConnection(socketPath: string): Promise<Neovim> {
     try {
-      const nvim = await this.connect();
+      const attempts = (this.connectionAttempts.get(socketPath) || 0) + 1;
+      this.connectionAttempts.set(socketPath, attempts);
+
+      const nvim = await attach({
+        socket: socketPath
+      });
+
+      // Reset connection attempts on successful connection
+      this.connectionAttempts.set(socketPath, 0);
+      return nvim;
+    } catch (error) {
+      const attempts = this.connectionAttempts.get(socketPath) || 0;
+      
+      // Check if we've exceeded maximum connection attempts
+      if (attempts >= this.MAX_CONNECTION_ATTEMPTS) {
+        console.error('Max connection attempts reached:', error);
+        throw new NeovimConnectionError(socketPath, error as Error);
+      }
+
+      // Exponential backoff with jitter
+      const delay = Math.min(
+        this.BASE_RETRY_DELAY * Math.pow(2, attempts - 1),
+        30000 // Max delay of 30 seconds
+      ) * (1 + Math.random()); // Add some jitter
+
+      console.warn(`Connection attempt ${attempts} failed. Retrying in ${delay}ms`);
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      // Retry connection
+      return this.attemptConnection(socketPath);
+    }
+  }
+
+  public async getBufferContents(filename?: string, socketPath?: string): Promise<Map<number, string>> {
+    try {
+      const nvim = await this.connect(socketPath);
       let buffer;
       
       if (filename) {
@@ -140,13 +189,13 @@ export class NeovimManager {
     }
   }
 
-  public async sendCommand(command: string): Promise<string> {
+  public async sendCommand(command: string, socketPath?: string): Promise<string> {
     if (!command || command.trim().length === 0) {
       throw new NeovimValidationError('Command cannot be empty');
     }
 
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
 
       // Remove leading colon if present
       const normalizedCommand = command.startsWith(':') ? command.substring(1) : command;
@@ -200,9 +249,9 @@ export class NeovimManager {
     }
   }
 
-  public async getNeovimStatus(): Promise<NeovimStatus | string> {
+  public async getNeovimStatus(socketPath?: string): Promise<NeovimStatus | string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       const window = await nvim.window;
       const cursor = await window.cursor;
       const mode = await nvim.mode;
@@ -370,9 +419,9 @@ export class NeovimManager {
     }
   }
 
-  public async editLines(startLine: number, mode: 'replace' | 'insert' | 'replaceAll', newText: string): Promise<string> {
+  public async editLines(startLine: number, mode: 'replace' | 'insert' | 'replaceAll', newText: string, socketPath?: string): Promise<string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       const splitByLines = newText.split('\n');
       const buffer = await nvim.buffer;
 
@@ -398,9 +447,9 @@ export class NeovimManager {
     }
   }
 
-  public async getWindows(): Promise<WindowInfo[]> {
+  public async getWindows(socketPath?: string): Promise<WindowInfo[]> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       const windows = await nvim.windows;
       const windowInfos: WindowInfo[] = [];
 
@@ -429,14 +478,14 @@ export class NeovimManager {
     }
   }
 
-  public async manipulateWindow(command: string): Promise<string> {
+  public async manipulateWindow(command: string, socketPath?: string): Promise<string> {
     const validCommands = ['split', 'vsplit', 'only', 'close', 'wincmd h', 'wincmd j', 'wincmd k', 'wincmd l'];
     if (!validCommands.some(cmd => command.startsWith(cmd))) {
       return 'Invalid window command';
     }
 
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       await nvim.command(command);
       return 'Window command executed';
     } catch (error) {
@@ -445,13 +494,13 @@ export class NeovimManager {
     }
   }
 
-  public async setMark(mark: string, line: number, col: number): Promise<string> {
+  public async setMark(mark: string, line: number, col: number, socketPath?: string): Promise<string> {
     if (!/^[a-z]$/.test(mark)) {
       return 'Invalid mark name (must be a-z)';
     }
 
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       await nvim.command(`mark ${mark}`);
       const window = await nvim.window;
       await (window.cursor = [line, col]);
@@ -462,14 +511,14 @@ export class NeovimManager {
     }
   }
 
-  public async setRegister(register: string, content: string): Promise<string> {
+  public async setRegister(register: string, content: string, socketPath?: string): Promise<string> {
     const validRegisters = [...'abcdefghijklmnopqrstuvwxyz"'];
     if (!validRegisters.includes(register)) {
       return 'Invalid register name';
     }
 
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       await nvim.eval(`setreg('${register}', '${content.replace(/'/g, "''")}')`);
       return `Register ${register} set`;
     } catch (error) {
@@ -478,9 +527,9 @@ export class NeovimManager {
     }
   }
 
-  public async visualSelect(startLine: number, startCol: number, endLine: number, endCol: number): Promise<string> {
+  public async visualSelect(startLine: number, startCol: number, endLine: number, endCol: number, socketPath?: string): Promise<string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       const window = await nvim.window;
       
       // Enter visual mode
@@ -499,9 +548,9 @@ export class NeovimManager {
     }
   }
 
-  public async switchBuffer(identifier: string | number): Promise<string> {
+  public async switchBuffer(identifier: string | number, socketPath?: string): Promise<string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       // If identifier is a number, switch by buffer number
       if (typeof identifier === 'number') {
@@ -529,9 +578,9 @@ export class NeovimManager {
     }
   }
 
-  public async saveBuffer(filename?: string): Promise<string> {
+  public async saveBuffer(filename?: string, socketPath?: string): Promise<string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       if (filename) {
         // Save with specific filename
@@ -558,13 +607,13 @@ export class NeovimManager {
     }
   }
 
-  public async openFile(filename: string): Promise<string> {
+  public async openFile(filename: string, socketPath?: string): Promise<string> {
     if (!filename || filename.trim().length === 0) {
       throw new NeovimValidationError('Filename cannot be empty');
     }
     
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       await nvim.command(`edit ${filename}`);
       return `Opened file: ${filename}`;
     } catch (error) {
@@ -573,13 +622,13 @@ export class NeovimManager {
     }
   }
 
-  public async searchInBuffer(pattern: string, options: { ignoreCase?: boolean; wholeWord?: boolean } = {}): Promise<string> {
+  public async searchInBuffer(pattern: string, options: { ignoreCase?: boolean; wholeWord?: boolean } = {}, socketPath?: string): Promise<string> {
     if (!pattern || pattern.trim().length === 0) {
       throw new NeovimValidationError('Search pattern cannot be empty');
     }
     
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       // Build search command with options
       let searchPattern = pattern;
@@ -612,13 +661,13 @@ export class NeovimManager {
     }
   }
 
-  public async searchAndReplace(pattern: string, replacement: string, options: { global?: boolean; ignoreCase?: boolean; confirm?: boolean } = {}): Promise<string> {
+  public async searchAndReplace(pattern: string, replacement: string, options: { global?: boolean; ignoreCase?: boolean; confirm?: boolean } = {}, socketPath?: string): Promise<string> {
     if (!pattern || pattern.trim().length === 0) {
       throw new NeovimValidationError('Search pattern cannot be empty');
     }
     
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       // Build substitute command
       let flags = '';
@@ -636,13 +685,13 @@ export class NeovimManager {
     }
   }
 
-  public async grepInProject(pattern: string, filePattern: string = '**/*'): Promise<string> {
+  public async grepInProject(pattern: string, filePattern: string = '**/*', socketPath?: string): Promise<string> {
     if (!pattern || pattern.trim().length === 0) {
       throw new NeovimValidationError('Grep pattern cannot be empty');
     }
     
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       // Use vimgrep for internal searching
       const command = `vimgrep /${pattern}/ ${filePattern}`;
@@ -668,9 +717,9 @@ export class NeovimManager {
     }
   }
 
-  public async getOpenBuffers(): Promise<BufferInfo[]> {
+  public async getOpenBuffers(socketPath?: string): Promise<BufferInfo[]> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       const buffers = await nvim.buffers;
       const windows = await nvim.windows;
       const bufferInfos: BufferInfo[] = [];
@@ -716,9 +765,9 @@ export class NeovimManager {
     }
   }
 
-  public async manageMacro(action: string, register?: string, count: number = 1): Promise<string> {
+  public async manageMacro(action: string, register?: string, count: number = 1, socketPath?: string): Promise<string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       switch (action) {
         case 'record':
@@ -752,9 +801,9 @@ export class NeovimManager {
     }
   }
 
-  public async manageTab(action: string, filename?: string): Promise<string> {
+  public async manageTab(action: string, filename?: string, socketPath?: string): Promise<string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       switch (action) {
         case 'new':
@@ -812,9 +861,9 @@ export class NeovimManager {
     }
   }
 
-  public async manageFold(action: string, startLine?: number, endLine?: number): Promise<string> {
+  public async manageFold(action: string, startLine?: number, endLine?: number, socketPath?: string): Promise<string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       switch (action) {
         case 'create':
@@ -860,9 +909,9 @@ export class NeovimManager {
     }
   }
 
-  public async navigateJumpList(direction: string): Promise<string> {
+  public async navigateJumpList(direction: string, socketPath?: string): Promise<string> {
     try {
-      const nvim = await this.connect();
+      const nvim = await this.connect(socketPath);
       
       switch (direction) {
         case 'back':

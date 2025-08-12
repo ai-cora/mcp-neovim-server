@@ -12,7 +12,7 @@ import { z } from "zod";
 const server = new McpServer(
   {
     name: "mcp-neovim-server",
-    version: "0.5.4"
+    version: "0.5.5"
   }
 );
 
@@ -32,7 +32,7 @@ server.resource(
     })
   }),
   async (uri) => {
-    const bufferContents = await neovimManager.getBufferContents();
+    const bufferContents = await neovimManager.getBufferContents(undefined, undefined);
     return {
       contents: [{
         uri: uri.href,
@@ -58,7 +58,7 @@ server.resource(
     })
   }),
   async (uri) => {
-    const openBuffers = await neovimManager.getOpenBuffers();
+    const openBuffers = await neovimManager.getOpenBuffers(undefined);
     return {
       contents: [{
         uri: uri.href,
@@ -73,10 +73,13 @@ server.resource(
 server.tool(
   "vim_buffer",
   "Get buffer contents with line numbers",
-  { filename: z.string().optional().describe("Optional file name to view a specific buffer") },
-  async ({ filename }) => {
+  { 
+    filename: z.string().optional().describe("Optional file name to view a specific buffer"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
+  },
+  async ({ filename, socket_path }) => {
     try {
-      const bufferContents = await neovimManager.getBufferContents(filename);
+      const bufferContents = await neovimManager.getBufferContents(filename, socket_path);
       return {
         content: [{
           type: "text",
@@ -99,8 +102,11 @@ server.tool(
 server.tool(
   "vim_command",
   "Execute Vim commands with optional shell command support",
-  { command: z.string().describe("Vim command to execute (use ! prefix for shell commands if enabled)") },
-  async ({ command }) => {
+  { 
+    command: z.string().describe("Vim command to execute (use ! prefix for shell commands if enabled)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
+  },
+  async ({ command, socket_path }) => {
     try {
       // Check if this is a shell command
       if (command.startsWith('!')) {
@@ -115,7 +121,7 @@ server.tool(
         }
       }
 
-      const result = await neovimManager.sendCommand(command);
+      const result = await neovimManager.sendCommand(command, socket_path);
       return {
         content: [{
           type: "text",
@@ -136,10 +142,12 @@ server.tool(
 server.tool(
   "vim_status",
   "Get comprehensive Neovim status including cursor position, mode, marks, and registers",
-  {},
-  async () => {
+  {
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
+  },
+  async ({ socket_path }) => {
     try {
-      const status = await neovimManager.getNeovimStatus();
+      const status = await neovimManager.getNeovimStatus(socket_path);
       return {
         content: [{
           type: "text",
@@ -163,11 +171,12 @@ server.tool(
   { 
     startLine: z.number().describe("The line number where editing should begin (1-indexed)"),
     mode: z.enum(["insert", "replace", "replaceAll"]).describe("Whether to insert new content, replace existing content, or replace entire buffer"),
-    lines: z.string().describe("The text content to insert or use as replacement")
+    lines: z.string().describe("The text content to insert or use as replacement"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ startLine, mode, lines }) => {
+  async ({ startLine, mode, lines, socket_path }) => {
     try {
-      const result = await neovimManager.editLines(startLine, mode, lines);
+      const result = await neovimManager.editLines(startLine, mode, lines, socket_path);
       return {
         content: [{
           type: "text",
@@ -190,11 +199,12 @@ server.tool(
   "Manage Neovim windows: split, close, and navigate between windows",
   { 
     command: z.enum(["split", "vsplit", "only", "close", "wincmd h", "wincmd j", "wincmd k", "wincmd l"])
-      .describe("Window manipulation command: split or vsplit to create new window, only to keep just current window, close to close current window, or wincmd with h/j/k/l to navigate between windows")
+      .describe("Window manipulation command: split or vsplit to create new window, only to keep just current window, close to close current window, or wincmd with h/j/k/l to navigate between windows"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ command }) => {
+  async ({ command, socket_path }) => {
     try {
-      const result = await neovimManager.manipulateWindow(command);
+      const result = await neovimManager.manipulateWindow(command, socket_path);
       return {
         content: [{
           type: "text",
@@ -218,11 +228,12 @@ server.tool(
   {
     mark: z.string().regex(/^[a-z]$/).describe("Single lowercase letter [a-z] to use as the mark name"),
     line: z.number().describe("The line number where the mark should be placed (1-indexed)"),
-    column: z.number().describe("The column number where the mark should be placed (0-indexed)")
+    column: z.number().describe("The column number where the mark should be placed (0-indexed)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ mark, line, column }) => {
+  async ({ mark, line, column, socket_path }) => {
     try {
-      const result = await neovimManager.setMark(mark, line, column);
+      const result = await neovimManager.setMark(mark, line, column, socket_path);
       return {
         content: [{
           type: "text",
@@ -245,11 +256,12 @@ server.tool(
   "Manage Neovim register contents",
   {
     register: z.string().regex(/^[a-z"]$/).describe("Register name - a lowercase letter [a-z] or double-quote [\"] for the unnamed register"),
-    content: z.string().describe("The text content to store in the specified register")
+    content: z.string().describe("The text content to store in the specified register"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ register, content }) => {
+  async ({ register, content, socket_path }) => {
     try {
-      const result = await neovimManager.setRegister(register, content);
+      const result = await neovimManager.setRegister(register, content, socket_path);
       return {
         content: [{
           type: "text",
@@ -274,11 +286,12 @@ server.tool(
     startLine: z.number().describe("The starting line number for visual selection (1-indexed)"),
     startColumn: z.number().describe("The starting column number for visual selection (0-indexed)"),
     endLine: z.number().describe("The ending line number for visual selection (1-indexed)"),
-    endColumn: z.number().describe("The ending column number for visual selection (0-indexed)")
+    endColumn: z.number().describe("The ending column number for visual selection (0-indexed)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ startLine, startColumn, endLine, endColumn }) => {
+  async ({ startLine, startColumn, endLine, endColumn, socket_path }) => {
     try {
-      const result = await neovimManager.visualSelect(startLine, startColumn, endLine, endColumn);
+      const result = await neovimManager.visualSelect(startLine, startColumn, endLine, endColumn, socket_path);
       return {
         content: [{
           type: "text",
@@ -301,11 +314,12 @@ server.tool(
   "vim_buffer_switch",
   "Switch between buffers by name or number",
   {
-    identifier: z.union([z.string(), z.number()]).describe("Buffer identifier - can be buffer number or filename/path")
+    identifier: z.union([z.string(), z.number()]).describe("Buffer identifier - can be buffer number or filename/path"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ identifier }) => {
+  async ({ identifier, socket_path }) => {
     try {
-      const result = await neovimManager.switchBuffer(identifier);
+      const result = await neovimManager.switchBuffer(identifier, socket_path);
       return {
         content: [{
           type: "text",
@@ -327,11 +341,12 @@ server.tool(
   "vim_buffer_save",
   "Save current buffer or save to specific filename",
   {
-    filename: z.string().optional().describe("Optional filename to save buffer to (defaults to current buffer's filename)")
+    filename: z.string().optional().describe("Optional filename to save buffer to (defaults to current buffer's filename)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ filename }) => {
+  async ({ filename, socket_path }) => {
     try {
-      const result = await neovimManager.saveBuffer(filename);
+      const result = await neovimManager.saveBuffer(filename, socket_path);
       return {
         content: [{
           type: "text",
@@ -353,11 +368,12 @@ server.tool(
   "vim_file_open",
   "Open files into new buffers",
   {
-    filename: z.string().describe("Path to the file to open")
+    filename: z.string().describe("Path to the file to open"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ filename }) => {
+  async ({ filename, socket_path }) => {
     try {
-      const result = await neovimManager.openFile(filename);
+      const result = await neovimManager.openFile(filename, socket_path);
       return {
         content: [{
           type: "text",
@@ -382,11 +398,12 @@ server.tool(
   {
     pattern: z.string().describe("Search pattern (supports regex)"),
     ignoreCase: z.boolean().optional().describe("Whether to ignore case in search (default: false)"),
-    wholeWord: z.boolean().optional().describe("Whether to match whole words only (default: false)")
+    wholeWord: z.boolean().optional().describe("Whether to match whole words only (default: false)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ pattern, ignoreCase = false, wholeWord = false }) => {
+  async ({ pattern, ignoreCase = false, wholeWord = false, socket_path }) => {
     try {
-      const result = await neovimManager.searchInBuffer(pattern, { ignoreCase, wholeWord });
+      const result = await neovimManager.searchInBuffer(pattern, { ignoreCase, wholeWord }, socket_path);
       return {
         content: [{
           type: "text",
@@ -412,11 +429,12 @@ server.tool(
     replacement: z.string().describe("Replacement text"),
     global: z.boolean().optional().describe("Replace all occurrences in each line (default: false)"),
     ignoreCase: z.boolean().optional().describe("Whether to ignore case in search (default: false)"),
-    confirm: z.boolean().optional().describe("Whether to confirm each replacement (default: false)")
+    confirm: z.boolean().optional().describe("Whether to confirm each replacement (default: false)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ pattern, replacement, global = false, ignoreCase = false, confirm = false }) => {
+  async ({ pattern, replacement, global = false, ignoreCase = false, confirm = false, socket_path }) => {
     try {
-      const result = await neovimManager.searchAndReplace(pattern, replacement, { global, ignoreCase, confirm });
+      const result = await neovimManager.searchAndReplace(pattern, replacement, { global, ignoreCase, confirm }, socket_path);
       return {
         content: [{
           type: "text",
@@ -439,11 +457,12 @@ server.tool(
   "Project-wide search using vimgrep with quickfix list",
   {
     pattern: z.string().describe("Search pattern to grep for"),
-    filePattern: z.string().optional().describe("File pattern to search in (default: **/* for all files)")
+    filePattern: z.string().optional().describe("File pattern to search in (default: **/* for all files)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ pattern, filePattern = "**/*" }) => {
+  async ({ pattern, filePattern = "**/*", socket_path }) => {
     try {
-      const result = await neovimManager.grepInProject(pattern, filePattern);
+      const result = await neovimManager.grepInProject(pattern, filePattern, socket_path);
       return {
         content: [{
           type: "text",
@@ -465,9 +484,11 @@ server.tool(
 server.tool(
   "vim_health",
   "Check Neovim connection health",
-  {},
-  async () => {
-    const isHealthy = await neovimManager.healthCheck();
+  {
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
+  },
+  async ({ socket_path }) => {
+    const isHealthy = await neovimManager.healthCheck(socket_path);
     return {
       content: [{
         type: "text",
@@ -484,11 +505,12 @@ server.tool(
   {
     action: z.enum(["record", "stop", "play"]).describe("Action to perform with macros"),
     register: z.string().optional().describe("Register to record/play macro (a-z, required for record/play)"),
-    count: z.number().optional().describe("Number of times to play macro (default: 1)")
+    count: z.number().optional().describe("Number of times to play macro (default: 1)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ action, register, count = 1 }) => {
+  async ({ action, register, count = 1, socket_path }) => {
     try {
-      const result = await neovimManager.manageMacro(action, register, count);
+      const result = await neovimManager.manageMacro(action, register, count, socket_path);
       return {
         content: [{
           type: "text",
@@ -512,11 +534,12 @@ server.tool(
   "Manage Neovim tabs: create, close, and navigate between tabs",
   {
     action: z.enum(["new", "close", "next", "prev", "first", "last", "list"]).describe("Tab action to perform"),
-    filename: z.string().optional().describe("Filename for new tab (optional)")
+    filename: z.string().optional().describe("Filename for new tab (optional)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ action, filename }) => {
+  async ({ action, filename, socket_path }) => {
     try {
-      const result = await neovimManager.manageTab(action, filename);
+      const result = await neovimManager.manageTab(action, filename, socket_path);
       return {
         content: [{
           type: "text",
@@ -541,11 +564,12 @@ server.tool(
   {
     action: z.enum(["create", "open", "close", "toggle", "openall", "closeall", "delete"]).describe("Folding action to perform"),
     startLine: z.number().optional().describe("Start line for creating fold (required for create)"),
-    endLine: z.number().optional().describe("End line for creating fold (required for create)")
+    endLine: z.number().optional().describe("End line for creating fold (required for create)"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ action, startLine, endLine }) => {
+  async ({ action, startLine, endLine, socket_path }) => {
     try {
-      const result = await neovimManager.manageFold(action, startLine, endLine);
+      const result = await neovimManager.manageFold(action, startLine, endLine, socket_path);
       return {
         content: [{
           type: "text",
@@ -568,11 +592,12 @@ server.tool(
   "vim_jump",
   "Navigate Neovim jump list: go back, forward, or list jumps",
   {
-    direction: z.enum(["back", "forward", "list"]).describe("Jump direction or list jumps")
+    direction: z.enum(["back", "forward", "list"]).describe("Jump direction or list jumps"),
+    socket_path: z.string().optional().describe("Optional socket path to connect to Neovim (defaults to NVIM_SOCKET_PATH or /tmp/nvim)")
   },
-  async ({ direction }) => {
+  async ({ direction, socket_path }) => {
     try {
-      const result = await neovimManager.navigateJumpList(direction);
+      const result = await neovimManager.navigateJumpList(direction, socket_path);
       return {
         content: [{
           type: "text",

@@ -2,13 +2,14 @@
 
 Connect Claude Desktop (or any Model Context Protocol client) to Neovim using MCP and the official neovim/node-client JavaScript library. This server leverages Vim's native text editing commands and workflows, which Claude already understands, to create a lightweight code or general purpose AI text assistance layer.
 
-**Version 0.5.3** - Now with a DXT package!
+**Version 0.5.5** - Dynamic socket path support!
 
 <a href="https://glama.ai/mcp/servers/s0fywdwp87"><img width="380" height="200" src="https://glama.ai/mcp/servers/s0fywdwp87/badge" alt="mcp-neovim-server MCP server" /></a>
 
 ## Features
 
 - Connects to your nvim instance if you expose a socket file, for example `--listen /tmp/nvim`, when starting nvim
+- **NEW in v0.5.5**: Dynamic socket path support - connect to multiple Neovim instances with different socket paths
 - Views your current buffers and manages buffer switching
 - Gets cursor location, mode, file name, marks, registers, and visual selections
 - Runs vim commands and optionally shell commands through vim
@@ -27,10 +28,13 @@ Connect Claude Desktop (or any Model Context Protocol client) to Neovim using MC
 
 ### Tools
 
+All tools now support an optional `socket_path` parameter to connect to specific Neovim instances. If not provided, uses the `NVIM_SOCKET_PATH` environment variable or defaults to `/tmp/nvim`.
+
 #### Core Tools
 - **vim_buffer**
   - Get buffer contents with line numbers (supports filename parameter)
   - Input `filename` (string, optional) - Get specific buffer by filename
+  - Input `socket_path` (string, optional) - Socket path to connect to specific Neovim instance
   - Returns numbered lines with buffer content
 - **vim_command**
   - Send a command to VIM for navigation, spot editing, and line deletion
@@ -128,6 +132,19 @@ The server implements comprehensive error handling with custom error classes and
 
 - `ALLOW_SHELL_COMMANDS`: Set to 'true' to enable shell command execution (e.g. `!ls`). Defaults to false for security.
 - `NVIM_SOCKET_PATH`: Set to the path of your Neovim socket. Defaults to '/tmp/nvim' if not specified.
+
+### Dynamic Socket Path Usage
+
+You can now connect to multiple Neovim instances simultaneously by specifying the `socket_path` parameter in any tool:
+
+```javascript
+// Connect to a specific Neovim instance
+await vim_buffer({ socket_path: "/tmp/nvim-demo" });
+await vim_command({ command: ":echo 'Hello'", socket_path: "/tmp/nvim-demo" });
+
+// Connect to default instance (uses NVIM_SOCKET_PATH or /tmp/nvim)
+await vim_status();
+```
 
 ## Installation
 
